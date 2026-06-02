@@ -12,8 +12,23 @@ emergency::EmergencyEvent makeTestEvent() {
     };
 }
 
-void processEvent(const emergency::EmergencyEvent& event) {
+bool validateEvent(const emergency::EmergencyEvent& event) {
+    return !event.type.empty() &&
+           !event.severity.empty() &&
+           !event.source.empty() &&
+           !event.message.empty();
+}
+
+bool processEvent(const emergency::EmergencyEvent& event) {
     emergency::logInfo("received " + emergency::formatEvent(event));
+
+    if (!validateEvent(event)) {
+        emergency::logError("event validation failed");
+        return false;
+    }
+
+    emergency::logInfo("event processed successfully");
+    return true;
 }
 
 } // namespace
@@ -21,7 +36,10 @@ void processEvent(const emergency::EmergencyEvent& event) {
 int main() {
     emergency::logInfo("emergency-notifyd starting");
     emergency::logInfo("ubus integration is disabled in this build");
-    processEvent(makeTestEvent());
+
+    if (!processEvent(makeTestEvent())) {
+        return 1;
+    }
 
     return 0;
 }
