@@ -1,6 +1,10 @@
 #include "emergency/event.hpp"
 #include "emergency/logger.hpp"
 
+#ifdef ENABLE_UBUS
+extern "C" int emergency_notifyd_run_ubus(void);
+#endif
+
 namespace {
 
 emergency::EmergencyEvent makeTestEvent() {
@@ -35,6 +39,11 @@ bool processEvent(const emergency::EmergencyEvent& event) {
 
 int main() {
     emergency::logInfo("emergency-notifyd starting");
+
+#ifdef ENABLE_UBUS
+    emergency::logInfo("ubus integration is enabled in this build");
+    return emergency_notifyd_run_ubus();
+#else
     emergency::logInfo("ubus integration is disabled in this build");
 
     if (!processEvent(makeTestEvent())) {
@@ -42,4 +51,5 @@ int main() {
     }
 
     return 0;
+#endif
 }
