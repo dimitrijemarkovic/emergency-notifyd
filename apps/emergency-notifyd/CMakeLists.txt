@@ -10,6 +10,7 @@ if(ENABLE_UBUS)
 
     find_library(UBUS_LIBRARY ubus REQUIRED)
     find_library(UBOX_LIBRARY ubox REQUIRED)
+    find_library(BLOBMSG_JSON_LIBRARY blobmsg_json REQUIRED)
 
     target_compile_definitions(emergency-notifyd
         PRIVATE
@@ -20,6 +21,7 @@ if(ENABLE_UBUS)
         PRIVATE
             ${UBUS_LIBRARY}
             ${UBOX_LIBRARY}
+            ${BLOBMSG_JSON_LIBRARY}
     )
 endif()
 

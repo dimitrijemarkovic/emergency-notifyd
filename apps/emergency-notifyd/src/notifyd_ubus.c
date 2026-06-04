@@ -1,6 +1,7 @@
 #include <signal.h>
 #include <stdio.h>
 
+#include <libubox/blobmsg_json.h>
 #include <libubox/uloop.h>
 #include <libubox/utils.h>
 #include <libubus.h>
@@ -49,6 +50,36 @@ static struct ubus_object notify_object = {
     .n_methods = ARRAY_SIZE(notify_methods),
 };
 
+static void handle_alarm_event(struct ubus_context *ctx,
+                               struct ubus_event_handler *ev,
+                               const char *type,
+                               struct blob_attr *msg)
+{
+    char *json = NULL;
+
+    (void)ctx;
+    (void)ev;
+
+    if (msg) {
+        json = blobmsg_format_json(msg, true);
+    }
+
+    fprintf(stdout, "[emergency-notifyd] received ubus event: %s\n", type);
+
+    if (json) {
+        fprintf(stdout, "[emergency-notifyd] payload: %s\n", json);
+        free(json);
+    } else {
+        fprintf(stdout, "[emergency-notifyd] payload: {}\n");
+    }
+
+    fflush(stdout);
+}
+
+static struct ubus_event_handler alarm_event_handler = {
+    .cb = handle_alarm_event,
+};
+
 static void handle_signal(int signo)
 {
     (void)signo;
@@ -81,7 +112,18 @@ int emergency_notifyd_run_ubus(void)
         return 1;
     }
 
+    ret = ubus_register_event_handler(ctx, &alarm_event_handler, "alarm.*");
+    if (ret) {
+        fprintf(stderr, "ERROR: ubus register event handler failed: %s\n", ubus_strerror(ret));
+        ubus_free(ctx);
+        uloop_done();
+        return 1;
+    }
+
     fprintf(stdout, "emergency-notifyd ubus service started\n");
+    fprintf(stdout, "registered ubus object: emergency.notify\n");
+    fprintf(stdout, "listening for ubus events: alarm.*\n");
+    fflush(stdout);
 
     uloop_run();
 
