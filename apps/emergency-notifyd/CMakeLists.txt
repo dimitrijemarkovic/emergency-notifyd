@@ -6,6 +6,7 @@ if(ENABLE_UBUS)
     target_sources(emergency-notifyd
         PRIVATE
             src/notifyd_ubus.c
+            src/actions/siren_action.c
     )
 
     find_library(UBUS_LIBRARY ubus REQUIRED)

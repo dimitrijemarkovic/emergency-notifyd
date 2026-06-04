@@ -5,6 +5,7 @@
 #include <libubox/uloop.h>
 #include <libubox/utils.h>
 #include <libubus.h>
+#include "actions/siren_action.h"
 
 static struct ubus_context *ctx;
 
@@ -64,7 +65,9 @@ static void handle_alarm_event(struct ubus_context *ctx,
         json = blobmsg_format_json(msg, true);
     }
 
-    fprintf(stdout, "[emergency-notifyd] received ubus event: %s\n", type);
+    if (siren_action_handle_alarm_event(ctx, type) != 0) {
+        fprintf(stderr, "[emergency-notifyd] siren action failed for event: %s\n", type ? type : "unknown");
+    }
 
     if (json) {
         fprintf(stdout, "[emergency-notifyd] payload: %s\n", json);
