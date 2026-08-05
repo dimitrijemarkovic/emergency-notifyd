@@ -1,11 +1,11 @@
 #include <signal.h>
-#include <stdio.h>
 
 #include <libubox/blobmsg.h>
 #include <libubox/uloop.h>
 #include <libubox/utils.h>
 #include <libubus.h>
 
+#include "emergency/log.h"
 #include "siren_controller.h"
 
 #define SIREN_OBJECT_NAME "emergency.siren"
@@ -167,8 +167,11 @@ int main(void)
     signal(SIGTERM, handle_signal);
     signal(SIGINT, handle_signal);
 
+    emergency_log_init("siren");
+
     if (siren_controller_init() != 0) {
-        fprintf(stderr, "ERROR: siren controller init failed\n");
+        emergency_log_error("siren controller init failed");
+        emergency_log_deinit();
         return 1;
     }
 
@@ -176,9 +179,10 @@ int main(void)
 
     ctx = ubus_connect(NULL);
     if (!ctx) {
-        fprintf(stderr, "ERROR: ubus connect failed\n");
+        emergency_log_error("ubus connect failed");
         siren_controller_deinit();
         uloop_done();
+        emergency_log_deinit();
         return 1;
     }
 
@@ -186,22 +190,23 @@ int main(void)
 
     ret = ubus_add_object(ctx, &siren_object);
     if (ret) {
-        fprintf(stderr, "ERROR: ubus add object failed: %s\n", ubus_strerror(ret));
+        emergency_log_error("ubus add object failed: %s", ubus_strerror(ret));
         ubus_free(ctx);
         siren_controller_deinit();
         uloop_done();
+        emergency_log_deinit();
         return 1;
     }
 
-    fprintf(stdout, "emergency-siren-service started\n");
-    fprintf(stdout, "registered ubus object: %s\n", SIREN_OBJECT_NAME);
-    fflush(stdout);
+    emergency_log_info("emergency-siren-service started");
+    emergency_log_info("registered ubus object: %s", SIREN_OBJECT_NAME);
 
     uloop_run();
 
     siren_controller_deinit();
     ubus_free(ctx);
     uloop_done();
+    emergency_log_deinit();
 
     return 0;
 }

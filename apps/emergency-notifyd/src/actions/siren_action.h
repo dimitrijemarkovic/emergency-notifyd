@@ -2,5 +2,7 @@
 
 #include <libubus.h>
 
-int siren_action_handle_alarm_event(struct ubus_context *ctx,
-                                    const char *event_type);
+#include "../action_result.h"
+
+action_result_t siren_action_handle_alarm_event(struct ubus_context *ctx,
+                                                const char *event_type);

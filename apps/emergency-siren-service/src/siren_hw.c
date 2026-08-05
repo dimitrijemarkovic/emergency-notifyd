@@ -5,6 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "emergency/log.h"
+
 #define GPIO_EXPORT     "/sys/class/gpio/export"
 #define GPIO_DIRECTION  "/sys/class/gpio/gpio595/direction"
 #define GPIO_VALUE      "/sys/class/gpio/gpio595/value"
@@ -19,7 +21,7 @@
 
 /*
  * Target frequency/duty configuration.
- * These values come from the currently validated Versa siren setup.
+ * These values match the siren hardware validated on the target board.
  */
 #define SIREN_PWM_PERIOD_NS      "485436"
 #define SIREN_PWM_DUTY_CYCLE_NS  "242718"
@@ -62,8 +64,7 @@ int siren_hw_init(void)
 
     write_sysfs(PWM_ENABLE, "0");
 
-    fprintf(stdout, "[emergency-siren-service] hardware initialized\n");
-    fflush(stdout);
+    emergency_log_info("hardware initialized");
 
     return 0;
 }

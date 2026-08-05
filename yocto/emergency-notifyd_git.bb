@@ -6,7 +6,10 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=6dbd2560b6458f6e47e08473fc9622d1"
 
 SRC_URI = "git://github.com/dimitrijemarkovic/emergency-notifyd.git;protocol=https;branch=main \
-           file://emergency-notifyd.service"
+           file://emergency-notifyd.service \
+           file://emergency-siren-service.service \
+           file://emergency-led-service.service \
+           file://zlog.conf"
 
 SRCREV = "${AUTOREV}"
 
@@ -16,17 +19,25 @@ S = "${WORKDIR}/git"
 
 inherit cmake systemd
 
-DEPENDS += "ubus libubox json-c"
-RDEPENDS:${PN} += "ubus libubox json-c"
+DEPENDS += "ubus libubox json-c zlog"
+RDEPENDS:${PN} += "ubus libubox json-c zlog"
 
-EXTRA_OECMAKE += "-DENABLE_UBUS=ON"
+EXTRA_OECMAKE += "-DENABLE_UBUS=ON -DENABLE_ZLOG=ON"
 
-SYSTEMD_SERVICE:${PN} = "emergency-notifyd.service"
+SYSTEMD_SERVICE:${PN} = "emergency-notifyd.service emergency-siren-service.service emergency-led-service.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_install:append() {
     install -d ${D}${systemd_system_unitdir}
     install -m 0644 ${WORKDIR}/emergency-notifyd.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/emergency-siren-service.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/emergency-led-service.service ${D}${systemd_system_unitdir}/
+
+    install -d ${D}${sysconfdir}/emergency
+    install -m 0644 ${WORKDIR}/zlog.conf ${D}${sysconfdir}/emergency/zlog.conf
 }
 
 FILES:${PN} += "${systemd_system_unitdir}/emergency-notifyd.service"
+FILES:${PN} += "${systemd_system_unitdir}/emergency-siren-service.service"
+FILES:${PN} += "${systemd_system_unitdir}/emergency-led-service.service"
+FILES:${PN} += "${sysconfdir}/emergency/zlog.conf"

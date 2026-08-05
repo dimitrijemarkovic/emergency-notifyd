@@ -1,0 +1,17 @@
+[Unit]
+Description=Emergency LED Service
+# Exact ubusd unit name on this image is unverified -- After=/Wants= on a
+# nonexistent unit is silently ignored by systemd, so this is safe even if the
+# name is wrong.
+# Restart=on-failure below is the real safety net regardless.
+After=ubus.service
+Wants=ubus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/emergency-led-service
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

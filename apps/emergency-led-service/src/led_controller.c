@@ -1,6 +1,6 @@
-#include "siren_controller.h"
+#include "led_controller.h"
 
-#include "siren_hw.h"
+#include "led_hw.h"
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -12,71 +12,57 @@
 typedef struct {
     int on_ms;
     int off_ms;
-} siren_step_t;
+} led_step_t;
 
 typedef struct {
-    siren_pattern_id_t id;
+    led_pattern_id_t id;
     const char *name;
-    const siren_step_t *steps;
+    led_channel_t channel;
+    const led_step_t *steps; /* NULL means solid on, like siren's STEADY */
     int step_count;
-} siren_pattern_def_t;
+} led_pattern_def_t;
 
 typedef struct {
-    siren_pattern_id_t pattern_id;
+    led_pattern_id_t pattern_id;
     int duration_sec;
-} siren_worker_arg_t;
+} led_worker_arg_t;
 
-static const siren_step_t temporal_3_steps[] = {
-    {500, 500},
-    {500, 500},
+static const led_step_t fast_blink_steps[] = {
+    {150, 150},
+};
+
+static const led_step_t slow_blink_steps[] = {
     {500, 1500},
 };
 
-static const siren_step_t temporal_4_steps[] = {
-    {500, 500},
-    {500, 500},
-    {500, 500},
-    {500, 2000},
-};
-
-static const siren_step_t panic_pulse_steps[] = {
-    {250, 250},
-};
-
-static const siren_step_t medical_slow_pulse_steps[] = {
-    {500, 2000},
-};
-
-static const siren_pattern_def_t pattern_table[] = {
+static const led_pattern_def_t pattern_table[] = {
     {
-        .id = SIREN_PATTERN_STEADY,
-        .name = "steady",
+        .id = LED_PATTERN_RED_FAST,
+        .name = "red_fast",
+        .channel = LED_CHANNEL_RED,
+        .steps = fast_blink_steps,
+        .step_count = sizeof(fast_blink_steps) / sizeof(fast_blink_steps[0]),
+    },
+    {
+        .id = LED_PATTERN_RED_SOLID,
+        .name = "red_solid",
+        .channel = LED_CHANNEL_RED,
         .steps = NULL,
         .step_count = 0,
     },
     {
-        .id = SIREN_PATTERN_TEMPORAL_3,
-        .name = "temporal_3",
-        .steps = temporal_3_steps,
-        .step_count = sizeof(temporal_3_steps) / sizeof(temporal_3_steps[0]),
+        .id = LED_PATTERN_BLUE_FAST,
+        .name = "blue_fast",
+        .channel = LED_CHANNEL_BLUE,
+        .steps = fast_blink_steps,
+        .step_count = sizeof(fast_blink_steps) / sizeof(fast_blink_steps[0]),
     },
     {
-        .id = SIREN_PATTERN_TEMPORAL_4,
-        .name = "temporal_4",
-        .steps = temporal_4_steps,
-        .step_count = sizeof(temporal_4_steps) / sizeof(temporal_4_steps[0]),
-    },
-    {
-        .id = SIREN_PATTERN_PANIC_PULSE,
-        .name = "panic_pulse",
-        .steps = panic_pulse_steps,
-        .step_count = sizeof(panic_pulse_steps) / sizeof(panic_pulse_steps[0]),
-    },
-    {
-        .id = SIREN_PATTERN_MEDICAL_SLOW_PULSE,
-        .name = "medical_slow_pulse",
-        .steps = medical_slow_pulse_steps,
-        .step_count = sizeof(medical_slow_pulse_steps) / sizeof(medical_slow_pulse_steps[0]),
+        .id = LED_PATTERN_BLUE_SLOW,
+        .name = "blue_slow",
+        .channel = LED_CHANNEL_BLUE,
+        .steps = slow_blink_steps,
+        .step_count = sizeof(slow_blink_steps) / sizeof(slow_blink_steps[0]),
     },
 };
 
@@ -85,7 +71,7 @@ static pthread_mutex_t pattern_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int thread_active = 0;
 static int keep_running = 0;
-static siren_pattern_id_t current_pattern = SIREN_PATTERN_INVALID;
+static led_pattern_id_t current_pattern = LED_PATTERN_INVALID;
 static int current_duration_sec = 0;
 
 static long long get_time_ms(void)
@@ -97,7 +83,7 @@ static long long get_time_ms(void)
     return ((long long)ts.tv_sec * 1000LL) + (ts.tv_nsec / 1000000LL);
 }
 
-static const siren_pattern_def_t *find_pattern_by_id(siren_pattern_id_t id)
+static const led_pattern_def_t *find_pattern_by_id(led_pattern_id_t id)
 {
     unsigned int i;
 
@@ -110,16 +96,16 @@ static const siren_pattern_def_t *find_pattern_by_id(siren_pattern_id_t id)
     return NULL;
 }
 
-int siren_controller_is_valid_id(int siren_id)
+int led_controller_is_valid_id(int led_id)
 {
-    return find_pattern_by_id((siren_pattern_id_t)siren_id) != NULL;
+    return find_pattern_by_id((led_pattern_id_t)led_id) != NULL;
 }
 
-const char *siren_controller_pattern_name_by_id(int siren_id)
+const char *led_controller_pattern_name_by_id(int led_id)
 {
-    const siren_pattern_def_t *pattern;
+    const led_pattern_def_t *pattern;
 
-    pattern = find_pattern_by_id((siren_pattern_id_t)siren_id);
+    pattern = find_pattern_by_id((led_pattern_id_t)led_id);
     if (!pattern) {
         return "unknown";
     }
@@ -132,7 +118,7 @@ static int is_running_locked(void)
     return keep_running;
 }
 
-int siren_controller_is_running(void)
+int led_controller_is_running(void)
 {
     int running;
 
@@ -143,7 +129,7 @@ int siren_controller_is_running(void)
     return running;
 }
 
-int siren_controller_current_id(void)
+int led_controller_current_id(void)
 {
     int id;
 
@@ -154,7 +140,7 @@ int siren_controller_current_id(void)
     return id;
 }
 
-int siren_controller_current_duration(void)
+int led_controller_current_duration(void)
 {
     int duration;
 
@@ -165,15 +151,15 @@ int siren_controller_current_duration(void)
     return duration;
 }
 
-const char *siren_controller_current_pattern_name(void)
+const char *led_controller_current_pattern_name(void)
 {
-    siren_pattern_id_t id;
+    led_pattern_id_t id;
 
     pthread_mutex_lock(&pattern_lock);
     id = current_pattern;
     pthread_mutex_unlock(&pattern_lock);
 
-    return siren_controller_pattern_name_by_id(id);
+    return led_controller_pattern_name_by_id(id);
 }
 
 static int duration_expired(long long start_ms, int duration_sec)
@@ -181,7 +167,7 @@ static int duration_expired(long long start_ms, int duration_sec)
     long long now_ms;
     long long duration_ms;
 
-    if (duration_sec == SIREN_DURATION_INFINITE) {
+    if (duration_sec == LED_DURATION_INFINITE) {
         return 0;
     }
 
@@ -217,44 +203,46 @@ static void mark_stopped_from_worker(void)
 {
     pthread_mutex_lock(&pattern_lock);
     keep_running = 0;
-    current_pattern = SIREN_PATTERN_INVALID;
+    current_pattern = LED_PATTERN_INVALID;
     current_duration_sec = 0;
     pthread_mutex_unlock(&pattern_lock);
 }
 
 static void *pattern_worker(void *arg)
 {
-    siren_worker_arg_t *worker_arg = (siren_worker_arg_t *)arg;
-    siren_pattern_id_t pattern_id = worker_arg->pattern_id;
+    led_worker_arg_t *worker_arg = (led_worker_arg_t *)arg;
+    led_pattern_id_t pattern_id = worker_arg->pattern_id;
     int duration_sec = worker_arg->duration_sec;
-    const siren_pattern_def_t *pattern;
+    const led_pattern_def_t *pattern;
     long long start_ms;
+    int brightness;
     int i;
 
     free(worker_arg);
 
     pattern = find_pattern_by_id(pattern_id);
     if (!pattern) {
-        siren_hw_off();
+        led_hw_all_off();
         mark_stopped_from_worker();
         return NULL;
     }
 
     start_ms = get_time_ms();
+    brightness = led_hw_ambient_brightness();
 
     emergency_log_info("pattern started: id=%d, pattern=%s, duration=%d",
                        pattern->id,
                        pattern->name,
                        duration_sec);
 
-    if (pattern->id == SIREN_PATTERN_STEADY) {
-        siren_hw_on();
+    if (!pattern->steps) {
+        led_hw_set_channel(pattern->channel, brightness);
 
         while (should_continue(start_ms, duration_sec)) {
             interruptible_sleep_ms(100, start_ms, duration_sec);
         }
 
-        siren_hw_off();
+        led_hw_all_off();
         mark_stopped_from_worker();
 
         emergency_log_info("pattern finished");
@@ -264,15 +252,15 @@ static void *pattern_worker(void *arg)
 
     while (should_continue(start_ms, duration_sec)) {
         for (i = 0; i < pattern->step_count && should_continue(start_ms, duration_sec); i++) {
-            siren_hw_on();
+            led_hw_set_channel(pattern->channel, brightness);
             interruptible_sleep_ms(pattern->steps[i].on_ms, start_ms, duration_sec);
 
-            siren_hw_off();
+            led_hw_set_channel(pattern->channel, 0);
             interruptible_sleep_ms(pattern->steps[i].off_ms, start_ms, duration_sec);
         }
     }
 
-    siren_hw_off();
+    led_hw_all_off();
     mark_stopped_from_worker();
 
     emergency_log_info("pattern finished");
@@ -280,18 +268,18 @@ static void *pattern_worker(void *arg)
     return NULL;
 }
 
-int siren_controller_init(void)
+int led_controller_init(void)
 {
-    return siren_hw_init();
+    return led_hw_init();
 }
 
-void siren_controller_deinit(void)
+void led_controller_deinit(void)
 {
-    siren_controller_stop();
-    siren_hw_deinit();
+    led_controller_stop();
+    led_hw_deinit();
 }
 
-int siren_controller_stop(void)
+int led_controller_stop(void)
 {
     int should_join = 0;
 
@@ -311,31 +299,31 @@ int siren_controller_stop(void)
     pthread_mutex_lock(&pattern_lock);
     thread_active = 0;
     keep_running = 0;
-    current_pattern = SIREN_PATTERN_INVALID;
+    current_pattern = LED_PATTERN_INVALID;
     current_duration_sec = 0;
     pthread_mutex_unlock(&pattern_lock);
 
-    siren_hw_off();
+    led_hw_all_off();
 
     return 0;
 }
 
-int siren_controller_start_by_id(int siren_id, int duration_sec)
+int led_controller_start_by_id(int led_id, int duration_sec)
 {
-    const siren_pattern_def_t *pattern;
-    siren_worker_arg_t *thread_arg;
+    const led_pattern_def_t *pattern;
+    led_worker_arg_t *thread_arg;
     int ret;
 
-    pattern = find_pattern_by_id((siren_pattern_id_t)siren_id);
+    pattern = find_pattern_by_id((led_pattern_id_t)led_id);
     if (!pattern) {
         return -1;
     }
 
     if (duration_sec <= 0) {
-        duration_sec = SIREN_DURATION_INFINITE;
+        duration_sec = LED_DURATION_INFINITE;
     }
 
-    siren_controller_stop();
+    led_controller_stop();
 
     thread_arg = malloc(sizeof(*thread_arg));
     if (!thread_arg) {
@@ -359,11 +347,11 @@ int siren_controller_start_by_id(int siren_id, int duration_sec)
         pthread_mutex_lock(&pattern_lock);
         keep_running = 0;
         thread_active = 0;
-        current_pattern = SIREN_PATTERN_INVALID;
+        current_pattern = LED_PATTERN_INVALID;
         current_duration_sec = 0;
         pthread_mutex_unlock(&pattern_lock);
 
-        siren_hw_off();
+        led_hw_all_off();
         return -1;
     }
 

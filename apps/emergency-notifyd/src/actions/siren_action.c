@@ -1,10 +1,11 @@
 #include "siren_action.h"
 
-#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
 #include <libubox/blobmsg.h>
+
+#include "emergency/log.h"
 
 #define SIREN_OBJECT_NAME "emergency.siren"
 #define SIREN_ALARM_METHOD "alarm"
@@ -94,10 +95,9 @@ static int lookup_siren_object(struct ubus_context *ctx, uint32_t *object_id)
 
     ret = ubus_lookup_id(ctx, SIREN_OBJECT_NAME, object_id);
     if (ret) {
-        fprintf(stderr,
-                "[emergency-notifyd] siren action failed: object '%s' not found: %s\n",
-                SIREN_OBJECT_NAME,
-                ubus_strerror(ret));
+        emergency_log_error("siren action failed: object '%s' not found: %s",
+                           SIREN_OBJECT_NAME,
+                           ubus_strerror(ret));
         return ret;
     }
 
@@ -117,14 +117,11 @@ static int cancel_siren_alarm(struct ubus_context *ctx, uint32_t object_id)
                       3000);
 
     if (ret) {
-        fprintf(stderr,
-                "[emergency-notifyd] siren cancel failed: %s\n",
-                ubus_strerror(ret));
+        emergency_log_error("siren cancel failed: %s", ubus_strerror(ret));
         return ret;
     }
 
-    fprintf(stdout, "[emergency-notifyd] siren cancel request sent\n");
-    fflush(stdout);
+    emergency_log_info("siren cancel request sent");
 
     return 0;
 }
@@ -151,58 +148,54 @@ static int call_siren_alarm(struct ubus_context *ctx,
     blob_buf_free(&b);
 
     if (ret) {
-        fprintf(stderr,
-                "[emergency-notifyd] siren alarm request failed: %s\n",
-                ubus_strerror(ret));
+        emergency_log_error("siren alarm request failed: %s", ubus_strerror(ret));
         return ret;
     }
 
-    fprintf(stdout,
-            "[emergency-notifyd] siren alarm request sent: siren_id=%d, duration=%d, pattern=%s\n",
-            config->siren_id,
-            config->duration_sec,
-            config->pattern_name);
-    fflush(stdout);
+    emergency_log_info("siren alarm request sent: siren_id=%d, duration=%d, pattern=%s",
+                       config->siren_id,
+                       config->duration_sec,
+                       config->pattern_name);
 
     return 0;
 }
 
-int siren_action_handle_alarm_event(struct ubus_context *ctx,
-                                    const char *event_type)
+action_result_t siren_action_handle_alarm_event(struct ubus_context *ctx,
+                                                const char *event_type)
 {
     uint32_t object_id;
     struct siren_action_config config;
     int ret;
 
     if (!ctx) {
-        fprintf(stderr, "[emergency-notifyd] siren action failed: missing ubus context\n");
-        return -1;
+        emergency_log_error("siren action failed: missing ubus context");
+        return ACTION_RESULT_ERROR;
     }
 
     config = resolve_siren_action_config(event_type);
 
     if (!config.valid) {
-        fprintf(stdout,
-                "[emergency-notifyd] unsupported alarm event ignored: %s\n",
-                event_type ? event_type : "unknown");
-        fflush(stdout);
-        return 0;
+        emergency_log_info("unsupported alarm event ignored: %s",
+                          event_type ? event_type : "unknown");
+        return ACTION_RESULT_IGNORED;
     }
 
-    fprintf(stdout,
-            "[emergency-notifyd] siren action resolved: event=%s, siren_id=%d, duration=%d, pattern=%s\n",
-            event_type,
-            config.siren_id,
-            config.duration_sec,
-            config.pattern_name);
-    fflush(stdout);
+    emergency_log_info("siren action resolved: event=%s, siren_id=%d, duration=%d, pattern=%s",
+                       event_type,
+                       config.siren_id,
+                       config.duration_sec,
+                       config.pattern_name);
 
     ret = lookup_siren_object(ctx, &object_id);
     if (ret) {
-        return ret;
+        return ACTION_RESULT_ERROR;
     }
 
     cancel_siren_alarm(ctx, object_id);
 
-    return call_siren_alarm(ctx, object_id, &config);
+    if (call_siren_alarm(ctx, object_id, &config) != 0) {
+        return ACTION_RESULT_ERROR;
+    }
+
+    return ACTION_RESULT_ACCEPTED;
 }

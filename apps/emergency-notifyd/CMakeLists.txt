@@ -6,7 +6,12 @@ if(ENABLE_UBUS)
     target_sources(emergency-notifyd
         PRIVATE
             src/notifyd_ubus.c
+            src/event_validation.c
+            src/event_classification.c
+            src/notify_stats.c
+            src/alarm_action.c
             src/actions/siren_action.c
+            src/actions/led_action.c
     )
 
     find_library(UBUS_LIBRARY ubus REQUIRED)
@@ -23,6 +28,7 @@ if(ENABLE_UBUS)
             ${UBUS_LIBRARY}
             ${UBOX_LIBRARY}
             ${BLOBMSG_JSON_LIBRARY}
+            emergency_log
     )
 endif()
 

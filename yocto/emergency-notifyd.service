@@ -1,6 +1,15 @@
 [Unit]
 Description=Emergency Notify Daemon
-After=network.target
+# ubus is a local Unix-domain socket bus, not networking, so network.target was
+# not the right dependency.
+# Exact ubusd unit name on this image is unverified -- After=/Wants= on a
+# nonexistent unit is silently ignored by systemd, so this is safe even if the
+# name is wrong. Restart=on-failure below is the real safety net regardless.
+# Starting after the reaction services is preferred, not required: notifyd
+# only looks up their ubus objects when handling an event, not at startup,
+# and reports an error gracefully per-action if one is not there yet.
+After=ubus.service emergency-siren-service.service emergency-led-service.service
+Wants=ubus.service
 
 [Service]
 Type=simple

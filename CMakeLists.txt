@@ -9,8 +9,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ENABLE_UBUS "Enable ubus integration" OFF)
+option(ENABLE_ZLOG "Use zlog as logging backend" OFF)
 
 add_subdirectory(libs/common)
+add_subdirectory(libs/log)
 add_subdirectory(apps/emergency-notifyd)
 add_subdirectory(apps/emergency-notify-sim)
 add_subdirectory(apps/emergency-siren-service)
+add_subdirectory(apps/emergency-led-service)
