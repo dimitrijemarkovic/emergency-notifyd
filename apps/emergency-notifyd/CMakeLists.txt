@@ -12,6 +12,7 @@ if(ENABLE_UBUS)
             src/alarm_action.c
             src/actions/siren_action.c
             src/actions/led_action.c
+            src/actions/mqtt_action.c
     )
 
     find_library(UBUS_LIBRARY ubus REQUIRED)

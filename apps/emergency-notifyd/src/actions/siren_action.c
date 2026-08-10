@@ -161,11 +161,14 @@ static int call_siren_alarm(struct ubus_context *ctx,
 }
 
 action_result_t siren_action_handle_alarm_event(struct ubus_context *ctx,
-                                                const char *event_type)
+                                                const char *event_type,
+                                                const alarm_event_payload_t *payload)
 {
     uint32_t object_id;
     struct siren_action_config config;
     int ret;
+
+    (void)payload;
 
     if (!ctx) {
         emergency_log_error("siren action failed: missing ubus context");

@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -9,9 +10,19 @@
 #define NOTIFY_OBJECT_NAME "emergency.notify"
 #define SIREN_OBJECT_NAME  "emergency.siren"
 #define LED_OBJECT_NAME    "emergency.led"
+#define MQTT_OBJECT_NAME   "emergency.mqtt"
 
 #define UBUS_TIMEOUT_MS 3000
 #define TEST_SETTLE_USEC 500000
+
+/* mqtt publishing happens on emergency-mqtt-service's own worker thread,
+ * after the ubus call that triggered it has already returned (see
+ * research/dnevnik-odluka.md D30) -- a plain TEST_SETTLE_USEC is not always
+ * enough to know the publish (or a cancel's "cleared" publish) has actually
+ * completed. This covers mqtt_client.c's worst case (connect + up to
+ * 5*100ms of loop draining). Used both after cancel_mqtt() and after an
+ * event that is expected to reach the mqtt action. */
+#define MQTT_ASYNC_SETTLE_USEC 700000
 
 /* Gap between sending the first and second event in the overlap test: long
  * enough that the first alarm has genuinely started (proven by the mid-test
@@ -21,16 +32,21 @@
 
 /* Number of registered alarm actions in notifyd's action registry
  * (apps/emergency-notifyd/src/alarm_action.c) that recognize every one of
- * the supported alarm.* types below -- both siren and led currently support
- * the exact same 5 types. Used only to predict the actions_sent delta in
- * run_stats_check(); update this if a third universally-supported action is
- * registered. */
-#define SIM_ACTIONS_PER_ACCEPTED_EVENT 2
+ * the supported alarm.* types below -- siren, led and mqtt currently all
+ * support the exact same 5 types. Used only to predict the actions_sent
+ * delta in run_stats_check(); update this if a fourth universally-supported
+ * action is registered. */
+#define SIM_ACTIONS_PER_ACCEPTED_EVENT 3
 
 /* run_alarm_overlap_test() sends two alarm.* events directly (fire, then
  * panic) outside of the declarative test_cases table -- run_stats_check()
  * needs to account for these when predicting the events_received delta. */
 #define SIM_OVERLAP_ALARM_EVENT_COUNT 2
+
+/* run_mqtt_broker_down_test() also sends two alarm.fire events directly
+ * (once with the broker stopped, once after recovery), outside the table --
+ * same accounting need as SIM_OVERLAP_ALARM_EVENT_COUNT above. */
+#define SIM_MQTT_BROKER_DOWN_EVENT_COUNT 2
 
 struct sim_test_case {
     const char *name;
@@ -127,6 +143,35 @@ static const struct blobmsg_policy notify_status_policy[__NOTIFY_STATUS_MAX] = {
     [NOTIFY_STATUS_ACTIONS_FAILED] = { .name = "actions_failed", .type = BLOBMSG_TYPE_INT32 },
     [NOTIFY_STATUS_LAST_EVENT] = { .name = "last_event", .type = BLOBMSG_TYPE_STRING },
     [NOTIFY_STATUS_LAST_RESULT] = { .name = "last_result", .type = BLOBMSG_TYPE_STRING },
+};
+
+struct mqtt_status {
+    int received;
+    int connected;
+    unsigned int published;
+    unsigned int failed;
+    unsigned int queued;
+    char last_topic[64];
+    char last_state[16];
+};
+
+enum {
+    MQTT_STATUS_CONNECTED,
+    MQTT_STATUS_PUBLISHED,
+    MQTT_STATUS_FAILED,
+    MQTT_STATUS_QUEUED,
+    MQTT_STATUS_LAST_TOPIC,
+    MQTT_STATUS_LAST_STATE,
+    __MQTT_STATUS_MAX
+};
+
+static const struct blobmsg_policy mqtt_status_policy[__MQTT_STATUS_MAX] = {
+    [MQTT_STATUS_CONNECTED] = { .name = "connected", .type = BLOBMSG_TYPE_INT8 },
+    [MQTT_STATUS_PUBLISHED] = { .name = "published", .type = BLOBMSG_TYPE_INT32 },
+    [MQTT_STATUS_FAILED] = { .name = "failed", .type = BLOBMSG_TYPE_INT32 },
+    [MQTT_STATUS_QUEUED] = { .name = "queued", .type = BLOBMSG_TYPE_INT32 },
+    [MQTT_STATUS_LAST_TOPIC] = { .name = "last_topic", .type = BLOBMSG_TYPE_STRING },
+    [MQTT_STATUS_LAST_STATE] = { .name = "last_state", .type = BLOBMSG_TYPE_STRING },
 };
 
 static const struct sim_test_case test_cases[] = {
@@ -396,6 +441,47 @@ static void notify_status_cb(struct ubus_request *req, int type, struct blob_att
     }
 }
 
+static void mqtt_status_cb(struct ubus_request *req, int type, struct blob_attr *msg)
+{
+    struct mqtt_status *status = (struct mqtt_status *)req->priv;
+    struct blob_attr *tb[__MQTT_STATUS_MAX] = {0};
+
+    (void)type;
+
+    if (!status || !msg) {
+        return;
+    }
+
+    blobmsg_parse(mqtt_status_policy,
+                  __MQTT_STATUS_MAX,
+                  tb,
+                  blob_data(msg),
+                  blob_len(msg));
+
+    status->received = 1;
+
+    if (tb[MQTT_STATUS_CONNECTED]) {
+        status->connected = blobmsg_get_u8(tb[MQTT_STATUS_CONNECTED]);
+    }
+    if (tb[MQTT_STATUS_PUBLISHED]) {
+        status->published = blobmsg_get_u32(tb[MQTT_STATUS_PUBLISHED]);
+    }
+    if (tb[MQTT_STATUS_FAILED]) {
+        status->failed = blobmsg_get_u32(tb[MQTT_STATUS_FAILED]);
+    }
+    if (tb[MQTT_STATUS_QUEUED]) {
+        status->queued = blobmsg_get_u32(tb[MQTT_STATUS_QUEUED]);
+    }
+    if (tb[MQTT_STATUS_LAST_TOPIC]) {
+        snprintf(status->last_topic, sizeof(status->last_topic),
+                 "%s", blobmsg_get_string(tb[MQTT_STATUS_LAST_TOPIC]));
+    }
+    if (tb[MQTT_STATUS_LAST_STATE]) {
+        snprintf(status->last_state, sizeof(status->last_state),
+                 "%s", blobmsg_get_string(tb[MQTT_STATUS_LAST_STATE]));
+    }
+}
+
 static int lookup_required_object(struct ubus_context *ctx, const char *object_name, uint32_t *object_id)
 {
     int ret;
@@ -452,6 +538,33 @@ static int cancel_led(struct ubus_context *ctx, uint32_t led_object_id)
     }
 
     usleep(200000);
+    return 0;
+}
+
+static int cancel_mqtt(struct ubus_context *ctx, uint32_t mqtt_object_id)
+{
+    int ret;
+
+    ret = ubus_invoke(ctx,
+                      mqtt_object_id,
+                      "cancel_alarm",
+                      NULL,
+                      NULL,
+                      NULL,
+                      UBUS_TIMEOUT_MS);
+
+    if (ret) {
+        fprintf(stderr, "[ERROR] failed to cancel mqtt: %s\n", ubus_strerror(ret));
+        return ret;
+    }
+
+    /* Unlike cancel_siren()/cancel_led() (synchronous hardware actions),
+     * this cancel_alarm may enqueue an asynchronous "cleared" publish (see
+     * D28/D30) if some alarm was left active. Waiting here for it to
+     * actually complete keeps the next mqtt "before" snapshot clean --
+     * otherwise a leftover in-flight publish could land inside the next
+     * test case's measurement window and corrupt its published delta. */
+    usleep(MQTT_ASYNC_SETTLE_USEC);
     return 0;
 }
 
@@ -513,6 +626,37 @@ static int get_led_status(struct ubus_context *ctx,
 
     if (!status->received) {
         fprintf(stderr, "[ERROR] led status reply not received\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int get_mqtt_status(struct ubus_context *ctx,
+                           uint32_t mqtt_object_id,
+                           struct mqtt_status *status)
+{
+    int ret;
+
+    memset(status, 0, sizeof(*status));
+    snprintf(status->last_topic, sizeof(status->last_topic), "%s", "none");
+    snprintf(status->last_state, sizeof(status->last_state), "%s", "none");
+
+    ret = ubus_invoke(ctx,
+                      mqtt_object_id,
+                      "status",
+                      NULL,
+                      mqtt_status_cb,
+                      status,
+                      UBUS_TIMEOUT_MS);
+
+    if (ret) {
+        fprintf(stderr, "[ERROR] failed to get mqtt status: %s\n", ubus_strerror(ret));
+        return ret;
+    }
+
+    if (!status->received) {
+        fprintf(stderr, "[ERROR] mqtt status reply not received\n");
         return -1;
     }
 
@@ -761,12 +905,17 @@ static int validate_led_expected_result(const struct sim_test_case *test_case,
 static int run_test_case(struct ubus_context *ctx,
                          uint32_t siren_object_id,
                          uint32_t led_object_id,
+                         uint32_t mqtt_object_id,
                          const struct sim_test_case *test_case,
                          int index,
                          int total)
 {
     struct siren_status status;
     struct led_status led;
+    struct mqtt_status mqtt_before;
+    struct mqtt_status mqtt_after;
+    unsigned int mqtt_published_delta;
+    unsigned int expected_mqtt_delta;
 
     fprintf(stdout,
             "\n[TEST %d/%d] %s (%s)\n",
@@ -782,6 +931,16 @@ static int run_test_case(struct ubus_context *ctx,
 
     if (cancel_led(ctx, led_object_id) != 0) {
         fprintf(stderr, "[FAIL] %s: pre-test led cancel failed\n", test_case->event_name);
+        return -1;
+    }
+
+    if (cancel_mqtt(ctx, mqtt_object_id) != 0) {
+        fprintf(stderr, "[FAIL] %s: pre-test mqtt cancel failed\n", test_case->event_name);
+        return -1;
+    }
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_before) != 0) {
+        fprintf(stderr, "[FAIL] %s: mqtt status query (before) failed\n", test_case->event_name);
         return -1;
     }
 
@@ -821,6 +980,32 @@ static int run_test_case(struct ubus_context *ctx,
             led.pattern);
 
     if (validate_led_expected_result(test_case, &led) != 0) {
+        return -1;
+    }
+
+    /* Extra margin beyond TEST_SETTLE_USEC above: the mqtt publish (or lack
+     * of it) happens on emergency-mqtt-service's own worker thread, after
+     * notifyd's ubus call to it has already returned. */
+    usleep(MQTT_ASYNC_SETTLE_USEC);
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_after) != 0) {
+        fprintf(stderr, "[FAIL] %s: mqtt status query (after) failed\n", test_case->event_name);
+        return -1;
+    }
+
+    fprintf(stdout,
+            "[INFO] mqtt status: connected=%d, published=%u, failed=%u, queued=%u\n",
+            mqtt_after.connected, mqtt_after.published, mqtt_after.failed, mqtt_after.queued);
+
+    mqtt_published_delta = mqtt_after.published - mqtt_before.published;
+    expected_mqtt_delta = test_case->expect_siren_trigger ? 1 : 0;
+
+    if (mqtt_published_delta != expected_mqtt_delta) {
+        fprintf(stderr,
+                "[FAIL] %s: expected mqtt published delta=%u, got %u\n",
+                test_case->event_name,
+                expected_mqtt_delta,
+                mqtt_published_delta);
         return -1;
     }
 
@@ -1083,6 +1268,196 @@ static int run_led_invalid_rpc_test(struct ubus_context *ctx,
     return 0;
 }
 
+/* Stops the mosquitto broker (systemctl stop mosquitto), sends an alarm, and
+ * confirms the outage stays isolated to emergency-mqtt-service: siren and
+ * led must still trigger normally, while emergency.mqtt status must show
+ * connected=false and a growing failed counter. Then restarts the broker
+ * and confirms recovery (connected=true, published growing again).
+ *
+ * This is the same kind of failure-isolation test as the manual procedure
+ * in D26, but deliberately different in scope: D26 is about NOT testing
+ * whether systemd restarts one of *our own* processes after it is killed
+ * (that would couple the simulator to systemd and to how the binaries
+ * happen to be launched, see D26's reasoning). Here, emergency-mqtt-service
+ * itself never stops -- only its *dependency* (the broker) goes away and
+ * comes back, and what is under test is our own code's handling of that,
+ * not systemd's process supervision of our own binary. Toggling mosquitto
+ * via systemctl is still a narrow, explicit exception to "the simulator is
+ * a pure ubus client" -- accepted here because the spec for this step
+ * explicitly calls for it (research/specs/korak-6-mqtt-service.md §9). */
+static int run_mqtt_broker_down_test(struct ubus_context *ctx,
+                                     uint32_t siren_object_id,
+                                     uint32_t led_object_id,
+                                     uint32_t mqtt_object_id,
+                                     int index,
+                                     int total)
+{
+    struct sim_test_case fire_case = {
+        .name = "broker down: fire",
+        .event_name = "alarm.fire",
+        .type = "fire",
+        .severity = "critical",
+        .message = "Broker down test: fire alarm",
+    };
+    struct siren_status siren;
+    struct led_status led;
+    struct mqtt_status mqtt_before;
+    struct mqtt_status mqtt_after;
+    int stop_ret;
+    int start_ret;
+
+    fprintf(stdout,
+            "\n[TEST %d/%d] mqtt broker unavailable (failure isolation for a network reaction service)\n",
+            index, total);
+
+    if (cancel_siren(ctx, siren_object_id) != 0 ||
+        cancel_led(ctx, led_object_id) != 0 ||
+        cancel_mqtt(ctx, mqtt_object_id) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: pre-test cancel failed\n");
+        return -1;
+    }
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_before) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: initial mqtt status query failed\n");
+        return -1;
+    }
+
+    fprintf(stdout, "[INFO] stopping mosquitto\n");
+    stop_ret = system("systemctl stop mosquitto");
+    if (stop_ret != 0) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: 'systemctl stop mosquitto' failed (exit=%d) -- "
+                "is systemd/mosquitto available on this run?\n",
+                stop_ret);
+        return -1;
+    }
+
+    usleep(500000);
+
+    fprintf(stdout, "[INFO] sending event: alarm.fire (broker stopped)\n");
+    if (send_alarm_event(ctx, &fire_case) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: event send failed\n");
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    usleep(TEST_SETTLE_USEC);
+
+    if (get_siren_status(ctx, siren_object_id, &siren) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: siren status query failed\n");
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    if (strcmp(siren.state, "playing") != 0 || siren.siren_id != 2 ||
+        strcmp(siren.pattern, "temporal_3") != 0) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: siren did not trigger while broker was down "
+                "(state=%s siren_id=%d pattern=%s) -- an mqtt outage must not affect other actions\n",
+                siren.state, siren.siren_id, siren.pattern);
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    if (get_led_status(ctx, led_object_id, &led) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: led status query failed\n");
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    if (strcmp(led.state, "playing") != 0 || led.led_id != 1 ||
+        strcmp(led.pattern, "red_fast") != 0) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: led did not trigger while broker was down "
+                "(state=%s led_id=%d pattern=%s) -- an mqtt outage must not affect other actions\n",
+                led.state, led.led_id, led.pattern);
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    usleep(MQTT_ASYNC_SETTLE_USEC);
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_after) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: mqtt status query (broker down) failed\n");
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    fprintf(stdout,
+            "[INFO] mqtt status while broker down: connected=%d published=%u failed=%u\n",
+            mqtt_after.connected, mqtt_after.published, mqtt_after.failed);
+
+    if (mqtt_after.connected) {
+        fprintf(stderr, "[FAIL] mqtt broker down: expected connected=false while broker is stopped\n");
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    if (mqtt_after.failed <= mqtt_before.failed) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: expected failed counter to increase (before=%u, after=%u)\n",
+                mqtt_before.failed, mqtt_after.failed);
+        system("systemctl start mosquitto");
+        return -1;
+    }
+
+    fprintf(stdout, "[INFO] restarting mosquitto\n");
+    start_ret = system("systemctl start mosquitto");
+    if (start_ret != 0) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: 'systemctl start mosquitto' failed (exit=%d)\n",
+                start_ret);
+        return -1;
+    }
+
+    usleep(500000);
+
+    if (cancel_siren(ctx, siren_object_id) != 0 ||
+        cancel_led(ctx, led_object_id) != 0 ||
+        cancel_mqtt(ctx, mqtt_object_id) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: post-recovery cancel failed\n");
+        return -1;
+    }
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_before) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: recovery baseline status query failed\n");
+        return -1;
+    }
+
+    fprintf(stdout, "[INFO] sending event: alarm.fire (broker recovered)\n");
+    if (send_alarm_event(ctx, &fire_case) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: recovery event send failed\n");
+        return -1;
+    }
+
+    usleep(TEST_SETTLE_USEC + MQTT_ASYNC_SETTLE_USEC);
+
+    if (get_mqtt_status(ctx, mqtt_object_id, &mqtt_after) != 0) {
+        fprintf(stderr, "[FAIL] mqtt broker down: recovery mqtt status query failed\n");
+        return -1;
+    }
+
+    fprintf(stdout,
+            "[INFO] mqtt status after recovery: connected=%d published=%u failed=%u\n",
+            mqtt_after.connected, mqtt_after.published, mqtt_after.failed);
+
+    if (!mqtt_after.connected) {
+        fprintf(stderr, "[FAIL] mqtt broker down: expected connected=true after broker restart\n");
+        return -1;
+    }
+
+    if (mqtt_after.published <= mqtt_before.published) {
+        fprintf(stderr,
+                "[FAIL] mqtt broker down: expected published counter to increase after recovery "
+                "(before=%u, after=%u)\n",
+                mqtt_before.published, mqtt_after.published);
+        return -1;
+    }
+
+    fprintf(stdout, "[PASS] mqtt broker unavailable (failure isolation for a network reaction service)\n");
+    return 0;
+}
+
 static int count_alarm_test_cases(void)
 {
     int total = sizeof(test_cases) / sizeof(test_cases[0]);
@@ -1146,8 +1521,12 @@ static int run_stats_check(struct ubus_context *ctx,
             after.last_result);
 
     /* + SIM_OVERLAP_ALARM_EVENT_COUNT: run_alarm_overlap_test() sends two
-     * alarm.* events (fire, panic) directly, outside the test_cases table. */
-    expected_alarm_events = count_alarm_test_cases() + SIM_OVERLAP_ALARM_EVENT_COUNT;
+     * alarm.* events (fire, panic) directly, outside the test_cases table.
+     * + SIM_MQTT_BROKER_DOWN_EVENT_COUNT: run_mqtt_broker_down_test() sends
+     * two more (broker down, then recovered), also outside the table. */
+    expected_alarm_events = count_alarm_test_cases() +
+                            SIM_OVERLAP_ALARM_EVENT_COUNT +
+                            SIM_MQTT_BROKER_DOWN_EVENT_COUNT;
 
     if (delta_received != (unsigned int)expected_alarm_events) {
         fprintf(stderr,
@@ -1190,6 +1569,7 @@ int main(void)
     uint32_t notify_object_id;
     uint32_t siren_object_id;
     uint32_t led_object_id;
+    uint32_t mqtt_object_id;
     struct notify_status stats_before;
     int passed = 0;
     int failed = 0;
@@ -1220,17 +1600,24 @@ int main(void)
         return 1;
     }
 
+    if (lookup_required_object(ctx, MQTT_OBJECT_NAME, &mqtt_object_id) != 0) {
+        ubus_free(ctx);
+        return 1;
+    }
+
     if (get_notify_status(ctx, notify_object_id, &stats_before) != 0) {
         ubus_free(ctx);
         return 1;
     }
 
     table_count = sizeof(test_cases) / sizeof(test_cases[0]);
-    /* + 1 alarm overlap test + 2 direct invalid RPC tests + 1 stats check */
-    total = table_count + 4;
+    /* + 1 alarm overlap test + 2 direct invalid RPC tests
+     * + 1 mqtt broker down test + 1 stats check */
+    total = table_count + 5;
 
     for (i = 0; i < table_count; i++) {
-        if (run_test_case(ctx, siren_object_id, led_object_id, &test_cases[i], i + 1, total) == 0) {
+        if (run_test_case(ctx, siren_object_id, led_object_id, mqtt_object_id,
+                          &test_cases[i], i + 1, total) == 0) {
             passed++;
         } else {
             failed++;
@@ -1255,8 +1642,16 @@ int main(void)
         failed++;
     }
 
+    if (run_mqtt_broker_down_test(ctx, siren_object_id, led_object_id, mqtt_object_id,
+                                  table_count + 4, total) == 0) {
+        passed++;
+    } else {
+        failed++;
+    }
+
     cancel_siren(ctx, siren_object_id);
     cancel_led(ctx, led_object_id);
+    cancel_mqtt(ctx, mqtt_object_id);
 
     if (run_stats_check(ctx, notify_object_id, &stats_before, total, total) == 0) {
         passed++;

@@ -92,7 +92,7 @@ static void handle_alarm_event(struct ubus_context *ctx,
         int any_recognized = 0;
 
         for (i = 0; i < alarm_actions_count; i++) {
-            action_result_t result = alarm_actions[i].handle(ctx, type);
+            action_result_t result = alarm_actions[i].handle(ctx, type, &payload);
 
             if (result != ACTION_RESULT_IGNORED) {
                 /* ACTION_RESULT_ERROR is a transport-level failure, not a

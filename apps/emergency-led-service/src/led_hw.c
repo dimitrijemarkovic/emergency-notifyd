@@ -112,8 +112,8 @@ int led_hw_ambient_brightness(void)
 
     fd = open(LED_AMBIENT_BRIGHTNESS_PATH, O_RDONLY);
     if (fd < 0) {
-        /* Fail-safe fallback (D24/D9): stay fully visible rather than dim
-         * when we cannot read ambient brightness at all. */
+        /* Fail-safe fallback: stay fully visible rather than dim when we
+         * cannot read ambient brightness at all. */
         return LED_BRIGHTNESS_FULL;
     }
 

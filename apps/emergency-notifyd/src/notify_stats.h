@@ -8,6 +8,14 @@ typedef struct {
     unsigned int events_accepted;
     unsigned int events_ignored;
     unsigned int events_invalid;
+    /* For a synchronous action (siren, led), "sent"/"failed" reflect the real
+     * hardware outcome -- the ubus call only returns after the action has
+     * actually happened. For an asynchronous action (mqtt), the action's own
+     * ubus handler returns as soon as the message is queued, before it is
+     * actually published -- these two fields then mean "dispatched", not
+     * "delivered". Delivery truth for an asynchronous action lives in that
+     * action's own "status" object (e.g. emergency.mqtt: published/failed),
+     * not here. */
     unsigned int actions_sent;
     unsigned int actions_failed;
     char last_event[64];

@@ -1,0 +1,18 @@
+[Unit]
+Description=Emergency MQTT Notification Service
+# mosquitto.service is a confirmed unit name on this image (verified
+# running), unlike the still-unverified ubus broker unit name (see
+# research/dnevnik-odluka.md D15). Wants= on either is still safe if a name
+# turns out wrong: systemd silently ignores After=/Wants= on a nonexistent
+# unit. Restart=on-failure below is the real safety net regardless.
+After=ubus.service mosquitto.service
+Wants=ubus.service mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/emergency-mqtt-service
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

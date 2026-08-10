@@ -9,6 +9,7 @@ SRC_URI = "git://github.com/dimitrijemarkovic/emergency-notifyd.git;protocol=htt
            file://emergency-notifyd.service \
            file://emergency-siren-service.service \
            file://emergency-led-service.service \
+           file://emergency-mqtt-service.service \
            file://zlog.conf"
 
 SRCREV = "${AUTOREV}"
@@ -19,12 +20,19 @@ S = "${WORKDIR}/git"
 
 inherit cmake systemd
 
-DEPENDS += "ubus libubox json-c zlog"
-RDEPENDS:${PN} += "ubus libubox json-c zlog"
+DEPENDS += "ubus libubox json-c zlog mosquitto"
+
+# TODO: RDEPENDS runtime package name for libmosquitto is NOT verified --
+# could not be determined from this repo (no sources/meta-openembedded
+# checkout available here). Check
+# sources/meta-openembedded/meta-networking/recipes-connectivity/mosquitto/mosquitto_2.0.18.bb
+# on the build server (PACKAGES/FILES split) before this line is trusted;
+# do not assume "libmosquitto1" without confirming it there.
+RDEPENDS:${PN} += "ubus libubox json-c zlog libmosquitto1"
 
 EXTRA_OECMAKE += "-DENABLE_UBUS=ON -DENABLE_ZLOG=ON"
 
-SYSTEMD_SERVICE:${PN} = "emergency-notifyd.service emergency-siren-service.service emergency-led-service.service"
+SYSTEMD_SERVICE:${PN} = "emergency-notifyd.service emergency-siren-service.service emergency-led-service.service emergency-mqtt-service.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_install:append() {
@@ -32,6 +40,7 @@ do_install:append() {
     install -m 0644 ${WORKDIR}/emergency-notifyd.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${WORKDIR}/emergency-siren-service.service ${D}${systemd_system_unitdir}/
     install -m 0644 ${WORKDIR}/emergency-led-service.service ${D}${systemd_system_unitdir}/
+    install -m 0644 ${WORKDIR}/emergency-mqtt-service.service ${D}${systemd_system_unitdir}/
 
     install -d ${D}${sysconfdir}/emergency
     install -m 0644 ${WORKDIR}/zlog.conf ${D}${sysconfdir}/emergency/zlog.conf
@@ -40,4 +49,5 @@ do_install:append() {
 FILES:${PN} += "${systemd_system_unitdir}/emergency-notifyd.service"
 FILES:${PN} += "${systemd_system_unitdir}/emergency-siren-service.service"
 FILES:${PN} += "${systemd_system_unitdir}/emergency-led-service.service"
+FILES:${PN} += "${systemd_system_unitdir}/emergency-mqtt-service.service"
 FILES:${PN} += "${sysconfdir}/emergency/zlog.conf"
