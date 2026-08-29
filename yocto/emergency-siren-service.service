@@ -7,6 +7,12 @@ Description=Emergency Siren Service
 After=ubus.service
 Wants=ubus.service
 
+# Log files go to the persistent data partition, which systemd mounts as its
+# own unit. Without this the service could start before that mount exists, in
+# which case the log directory cannot be created and logging silently falls
+# back to standard output.
+RequiresMountsFor=/run/media/data-mmcblk0p9
+
 [Service]
 Type=simple
 ExecStart=/usr/bin/emergency-siren-service

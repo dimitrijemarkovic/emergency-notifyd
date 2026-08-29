@@ -7,15 +7,10 @@
 #include <libubus.h>
 
 #include "emergency/log.h"
+#include "mqtt_client.h"
 #include "mqtt_publisher.h"
 
 #define MQTT_OBJECT_NAME "emergency.mqtt"
-
-/* Must describe the same address/port as mqtt_client.c's own constants --
- * kept as a separate literal here rather than shared across the ubus/hw
- * boundary, same as the rest of this codebase does not reach across that
- * boundary for internal details. */
-#define MQTT_BROKER_DESC "localhost:1883"
 
 static struct ubus_context *ctx;
 
@@ -60,7 +55,7 @@ static void send_mqtt_reply(struct ubus_context *ctx,
     }
 
     blobmsg_add_u8(&b, "connected", stats.connected);
-    blobmsg_add_string(&b, "broker", MQTT_BROKER_DESC);
+    blobmsg_add_string(&b, "broker", mqtt_client_broker_desc());
     blobmsg_add_u32(&b, "published", stats.published);
     blobmsg_add_u32(&b, "failed", stats.failed);
     blobmsg_add_u32(&b, "queued", stats.queued);
@@ -199,6 +194,10 @@ int main(void)
     signal(SIGINT, handle_signal);
 
     emergency_log_init("mqtt");
+
+    /* Before the publisher thread starts, so the resolved address is never
+     * written while another thread can read it. */
+    mqtt_client_configure_from_env();
 
     if (mqtt_publisher_init() != 0) {
         emergency_log_error("mqtt publisher init failed");

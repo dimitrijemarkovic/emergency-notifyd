@@ -6,6 +6,10 @@ typedef enum {
     LED_CHANNEL_BLUE,
 } led_channel_t;
 
+/* Reads the device's own limits (max_brightness for the channels and for the
+ * screen backlight) and derives the full/dim levels and the day/night
+ * threshold from them. Unreadable limits fall back to built-in defaults with
+ * a warning rather than failing: an alarm indicator must still start. */
 int led_hw_init(void);
 void led_hw_deinit(void);
 

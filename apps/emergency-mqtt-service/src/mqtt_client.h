@@ -1,5 +1,17 @@
 #pragma once
 
+/* Resolves the broker address from the environment, EMERGENCY_MQTT_HOST and
+ * EMERGENCY_MQTT_PORT, falling back to localhost:1883 when either is unset or
+ * unusable. Call once from main(), before the publisher thread starts: after
+ * that the resolved address is read from two threads and never written again.
+ * Sending alarms to a broker on another machine is then a matter of setting
+ * these two variables, with no change to this code. */
+void mqtt_client_configure_from_env(void);
+
+/* "host:port" of the broker this service will use. Valid after
+ * mqtt_client_configure_from_env(), and safe to call from the ubus thread. */
+const char *mqtt_client_broker_desc(void);
+
 int mqtt_client_init(void);
 void mqtt_client_deinit(void);
 

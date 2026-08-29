@@ -10,7 +10,8 @@ SRC_URI = "git://github.com/dimitrijemarkovic/emergency-notifyd.git;protocol=htt
            file://emergency-siren-service.service \
            file://emergency-led-service.service \
            file://emergency-mqtt-service.service \
-           file://zlog.conf"
+           file://zlog.conf \
+           file://mqtt.env"
 
 SRCREV = "${AUTOREV}"
 
@@ -44,6 +45,7 @@ do_install:append() {
 
     install -d ${D}${sysconfdir}/emergency
     install -m 0644 ${WORKDIR}/zlog.conf ${D}${sysconfdir}/emergency/zlog.conf
+    install -m 0644 ${WORKDIR}/mqtt.env ${D}${sysconfdir}/emergency/mqtt.env
 }
 
 FILES:${PN} += "${systemd_system_unitdir}/emergency-notifyd.service"
@@ -51,3 +53,4 @@ FILES:${PN} += "${systemd_system_unitdir}/emergency-siren-service.service"
 FILES:${PN} += "${systemd_system_unitdir}/emergency-led-service.service"
 FILES:${PN} += "${systemd_system_unitdir}/emergency-mqtt-service.service"
 FILES:${PN} += "${sysconfdir}/emergency/zlog.conf"
+FILES:${PN} += "${sysconfdir}/emergency/mqtt.env"

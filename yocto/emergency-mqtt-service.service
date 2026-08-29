@@ -8,8 +8,19 @@ Description=Emergency MQTT Notification Service
 After=ubus.service mosquitto.service
 Wants=ubus.service mosquitto.service
 
+# Log files go to the persistent data partition, which systemd mounts as its
+# own unit. Without this the service could start before that mount exists, in
+# which case the log directory cannot be created and logging silently falls
+# back to standard output.
+RequiresMountsFor=/run/media/data-mmcblk0p9
+
 [Service]
 Type=simple
+# Broker address comes from the environment, so pointing this service at a
+# broker on another machine is a configuration change, not a rebuild. The
+# leading dash makes the file optional: without it the service falls back to
+# localhost:1883.
+EnvironmentFile=-/etc/emergency/mqtt.env
 ExecStart=/usr/bin/emergency-mqtt-service
 Restart=on-failure
 RestartSec=2
