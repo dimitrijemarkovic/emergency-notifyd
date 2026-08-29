@@ -1,0 +1,14 @@
+# Prolazni fajlovi LaTeX prevoda. Gotov rad, teza.pdf, se prati (izuzetak nize).
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.pdf
+*.toc
+*.xdv
+
+# Gotov rad ide u repo.
+!teza.pdf
